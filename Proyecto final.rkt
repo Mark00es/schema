@@ -37,8 +37,8 @@
    (cons '&& and?)
    (cons '|| or?)   
    (cons 'concat string-append)
-   (cons 'tamstr string-length)   
-   (cons 'mayustr string-upcase)   
+   (cons 'subcad substring)   
+   (cons 'tamcad string-length)   
   )
 )
 ; (apply (cdr (assq '+ primitives)) '(1 2 3 4))
@@ -120,7 +120,7 @@
     [(list l)(valV l)]
     [(id x) (env-lookup x env)]; buscar el valor de x en env
     [(prim prim-name args) (prim-ops prim-name (map (λ (x) (interp x env)) args))]
-    [(if-tf c et ef) (if (interp c env)
+    [(if-tf c et ef) (if (valV-v (interp c env))
                          (interp et env)
                          (interp ef env))]
     [(with x e b) (interp b (extend-env x (interp e env) env))] ; Si asociamos una funcion a una variable, la funcion entra al env
@@ -140,6 +140,24 @@
     )
   )
 
+#|(define (prim-ops op-name args)
+  (with-handlers
+      ([exn? (λ (e) (error "type error"))])
+    (let ([vals (map (λ (x) (valV-v x)) args)])
+      (valV (apply (cdr (assq op-name primitives)) vals)))))
+|#
+(deftype Type
+  (Num)
+  (Bool))
+
+;typeof: expr -> type/error
+(define (typeof expr)
+  (match expr
+    [(num n) (Num)]
+    [(bool b) (Bool)]
+    )
+  )
+
 ; run: Src -> Src
 ; corre un programa
 (define (run prog)
@@ -149,9 +167,27 @@
       [(closureV arg body env) res])
     )
   )
+
+; Pruebas de los problemas
+
+; Problema 1
+
+(test (run 1) 1)
+(test (run #t) #t)
+(test (run "hola") "hola")
+(test (run '{if-tf {== 4 4} 8 4}) 8)
+
+(test (run '{concat "hola" ", " "como estas"}) "hola, como estas")
+(test (run '{subcad "banaba" 1 4}) "ana")
+;(test (run '{tamcad "hola"}) "HOLA")
+
+
 ;(run '{size (list 1 2 3 4)})
 ;(run '{mayustr "hola mundo"})
 
+; Problema 2
+
+;(test (run '{with {add {fun {a b c} {+ a {+ b c}}}} {+ {add 2 3 5 } {add 4 5 6}}}) 1)
 
 ; Pruebas base para el intérprete final
 
