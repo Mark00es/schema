@@ -2,36 +2,20 @@
 (print-only-errors #t) ; Para ver solo los errores.
 
 #|
+<expr> ::=   <num> | <bool> | <id>
+            | (+ <expr> <expr>)
+            | (with <id> <expr> <expr>)
+            | (app <id> <expr>) 
+|#
+
+#|
 <FAE> ::=   <num> | <bool> | <id>
-            | (+ <FAE> <FAE>)
-            | (- <FAE> <FAE>)
+            | (prim op-name <FAE> ... <FAE>)
             | (if-tf <FAE> <FAE> <FAE>)
             | (with <id> <FAE> <FAE>)
-            | (app <FAE> <FAE>)
-            | (fun <id> <FAE>) 
-            ; cajas mutables
-            | (newbox <expr>)
-            | (setbox <expr> <expr>)
-            | (openbox <expr>)
-            | (seqn <expr> <expr>) 
+            | (app <FAE> <FAE>) ; puedo aplicar una funcion a otra funcion / puedo usar una funcion como argumento. 
+            | (fun <id> <FAE>) ; fun(que es una lambda) nombre-arg body
 |#
-(deftype Expr
-  [num n]                                 ; <num>
-  [bool b]                                ; <bool>
-  [str s]                                 ; <string>
-  [upper-str val]
-  [if-tf c et ef]                         ; (if-tf <FAE> <FAE> <FAE>)
-  [with id-name named-expr body-expr]     ; (with <id> <FAE> <FAE>)
-  [id name]                               ; <id> 
-  [app fname arg-expr]                    ; (app <FAE> <FAE>) ; ahora podemos aplicar una funcion a otra
-  [fun arg body]                          ; (fun <id> <FAE>) ; mantenemos el <id> como el nombre del argumento
-  [newbox b]
-  [openbox b]
-  [setbox b val]
-  [seqn e1 e2]
-  [prim name args]
-) 
-
 (define (not-equal? a b)
   (not (equal? a b)))
 (define (and? a b)
@@ -57,48 +41,48 @@
   )
 )
 
-; 1. Actualizar el environment
+; (apply (cdr (assq '+ primitives)) '(1 2 3 4))
+
+(deftype Expr
+  [num n]                                 ; <num>
+  [bool b]                                ; <bool>
+  [str s]                                 ; <string>  
+  [add l r]                               ; (+ <FAE> <FAE>)
+  [sub l r]                               ; (- <FAE> <FAE>)
+  [mult l r]
+  [zero n]
+  [min-eq l r]
+  [if-tf c et ef]                         ; (if-tf <FAE> <FAE> <FAE>)
+  [with id-name named-expr body-expr]     ; (with <id> <FAE> <FAE>)
+  [id name]                               ; <id> 
+  [app fname arg-expr]                    ; (app <FAE> <FAE>) ; ahora podemos aplicar una funcion a otra
+  [fun arg body]                          ; (fun <id> <FAE>) ; mantenemos el <id> como el nombre del argumento
+  [rec id-name named-expr body-expr]
+  [prim name args]
+) 
+
+
 #|
 <env> ::= (mtEnv)
-          | (aEnv <id> <loc> <env>)
+          | (aEnv <id> <val> <env>)
+          | (aRecEnv <id> <boxed-val> <env>)
 |#
 (deftype Env
   (mtEnv)
-  (aEnv id loc env)
+  (aEnv id val env)
   )
 
 ; empty-env -> (mtEnv)
 (define empty-env (mtEnv))
 
-; extend-env:: <id> <loc> <env> -> <env>
+; extend-env:: <id> <val> <env> -> <env>
 (define extend-env aEnv)
-; env-lookup :: <id> <loc> -> <val>
-; buscar el valor de una variable dentro del ambiete
+; env-lookup :: <id> <env> -> <val>
+; buscar el valor de una variable dentro del ambiente
 (define (env-lookup x env)
   (match env
     [(mtEnv) (error "undefined: " x)]
-    [(aEnv id loc tail)(if (eq? id x) loc (env-lookup x tail))]
-    )
-  )
-
-
-; 2. Crear el store
-#|
-<sto> ::= (mtSto)
-          | (aSto <loc> <val> <sto>)
-|#
-
-(deftype Sto
-  (mtSto)
-  (aSto loc val sto)
-  )
-
-(define empty-sto (mtSto))
-(define extend-sto aSto)
-(define (sto-lookup l sto)
-  (match sto
-    [(mtSto) (error "segmentation fault: " l)]
-    [(aSto loc val tail) (if (eq? l loc) val (sto-lookup l tail))]
+    [(aEnv id val tail)(if (eq? id x) val (env-lookup x tail))]
     )
   )
 
@@ -117,156 +101,97 @@
   (match src
     [(? number?) (num src)]
     [(? boolean?) (bool src)]
+    [(? string?) (str src)]
     [(? symbol?) (id src)]
-    [(? string?)(str src)]
-    [(list 'upper-str val) (string-upcase (parse val))]
+    [(list '+ s1 s2) (add (parse s1) (parse s2))]
+    [(list '- s1 s2) (sub (parse s1) (parse s2))]
+    [(list '* s1 s2) (mult (parse s1) (parse s2))]
+    [(list 'zero?? n) (zero (parse n))]
+    [(list 'min-eq?? s1 s2) (min-eq (parse s1) (parse s2))]
     [(list 'if-tf c et ef) (if-tf (parse c) (parse et) (parse ef))]
+    [(list 'with-rec (list x e) b) (app (fun x (parse b)) (parse e))]
+    [(list 'rec (list x e) b)
+     (parse `{with-rec {,x {Y {fun {,x} ,e}}} ,b})]
+    [(list arg e) (app (parse arg) (parse e))]; 2. Subir de nivel nuestras funciones
+    [(list 'fun (list arg) body) (fun arg (parse body))] ; 1. Agregar el caso del fun
     [(list 'with vars body) (concat-withs vars body)]
-    [(list 'newbox b) (newbox (parse b))]
-    [(list 'openbox e) (openbox (parse e))]
-    [(list 'setbox b v) (setbox (parse b) (parse v))]
-    [(list 'seqn e1 e2) (seqn (parse e1) (parse e2))]
-    [(list arg e) (app (parse arg) (parse e))]
-    [(list 'fun (list arg) body) (fun arg (parse body))]
     [(cons prim-name args) (prim prim-name (map parse args))]
     )
   )
-; 4. Incluir un nuevo tipo de valor v*s
+
 (deftype Val
   (valV v) ; numero, booleano, string, byte, etc.
   (closureV arg body env) ; closure = fun + env
-  (v*s val sto) ; val (valV/closureV) + sto (last memory)
-  (boxV loc) ; Que contiene un box?
+
   )
 
-
-; Que devuelve un newbox 10?
-; Una caja, pero eso no lo soporta nuestro lenguaje
-
-
-; 3. Actualizar interp.
-; Descubrimiento clave de la clase pasada: Sto necesita existir
-; interp :: Expr Env Sto -> Val*Sto --> CÃ3mo represento este valor?
+; interp :: Expr  Env -> Val
 ; interpreta una expresion
-(define (interp expr env sto)
+(define (interp expr env)
   (match expr
-    [(num n) (v*s (valV n) sto)] ; 6. Actualizar valores basicos
-    [(bool b) (v*s (valV b) sto)]
-    [(str s) (v*s (valV s) sto)]
-    ;[(upper-str s) (v*s (valV (string-upcase s)) sto)]
-    [(upper-str val)
-     (def (v*s s-val s-sto) (interp val env sto))
-     (v*s (valV-upper-str s-val) s-sto)]
-    [(fun arg body) (v*s (closureV arg body env) sto)]
-    [(id x) (v*s (sto-lookup (env-lookup x env) sto) sto)] ; 7. Actualizar la busqueda de variables
-    [(if-tf c et ef)
-     (def (v*s c-val c-sto) (interp c env sto))
-     (if (valV-v c-val)
-         (interp et env c-sto)
-         (interp ef env c-sto))]
-    ; 9. Actualizar la aplicacion de funcion
-    [(app f e) ; f -> fun-expr & e -> arg-expr
-     (def (v*s (closureV arg body fenv) fun-sto) (interp f env sto))
-     (def (v*s arg-val arg-sto) (interp e env fun-sto))
-     ; 0. Obtener nuevla loc, como?
-     (def new-loc (malloc arg-sto))
-     ; 1. Extender ambiente
-     ; 2. Extender store
-     ; 3. interp body
-     (interp body
-             (extend-env arg new-loc fenv)
-             (extend-sto new-loc arg-val arg-sto))]
-
-    [(newbox b)
-     ; 1. Interpretar b
-     (def (v*s b-val b-sto) (interp b env sto))
-     ; 2. Nueva direccion
-     (def new-loc (malloc b-sto))
-     ; 3. Actualizar sto
-     (v*s (boxV new-loc) (extend-sto new-loc b-val b-sto))
+    [(num n) (valV n)]
+    [(bool b) (valV b)]
+    [(str s) (valV s)]
+    [(id x) (env-lookup x env)]; buscar el valor de x en env
+    [(add l r) (valV+ (interp l env) (interp r env))]
+    [(sub l r) (valV- (interp l env) (interp r env))]
+    [(mult l r) (valV* (interp l env) (interp r env))]
+    [(zero n) (zeroV (interp n env))]
+    [(min-eq l r) (min-eqV (interp l env) (interp r env))]
+    [(if-tf c et ef) (if (valV-v (interp c env))
+                         (interp et env)
+                         (interp ef env))]
+    [(fun arg body) (closureV arg body env)] ; Por ahora, devolvemos la misma expresion que nos llego
+    [(app f e)
+     (def (closureV arg body fenv) (interp f env)) ; Esto permite encontrar (fun 'x (add (id 'x) (id 'x))) por ejemplo y tomar arg y body
+    
+     (interp body (extend-env arg (interp e env) fenv)) ; parece que no funciona ni con estatico ni dinamico
      ]
-
-    [(openbox b)
-     ; 1. interp b
-     (def (v*s (boxV loc) b-sto) (interp b env sto))
-     ; 2. devolver resultado
-     (v*s (sto-lookup loc b-sto) b-sto)     
-     ]
-
-    [(setbox b v)
-     ; 1. interp b --> loc que va a ser actualizado.
-     (def (v*s (boxV loc) b-sto) (interp b env sto))
-     ; 2. interp v --> para simplificar v
-     (def (v*s v-val v-sto) (interp v env b-sto))
-     ; 3. actualizar el sto
-     (v*s v-val (extend-sto loc v-val v-sto))
-     ]
-
-    [(seqn e1 e2)
-     ; interp e1
-     (def (v*s e1-val e1-sto) (interp e1 env sto))
-     ; interp e2 de modo que e1 afecte a e2
-     (def (v*s e2-val e2-sto) (interp e2 env e1-sto))
-     ; return
-     (v*s e2-val e2-sto)
-     ]
-    [(prim prim-name args)
-     (prim-ops prim-name (map (λ (x) (interp x env sto)) args) sto)]
-    [(with x e b)
-     (def (v*s expr-val expr-sto) (interp e env sto))
-     (def new-loc (malloc expr-sto))
-     (interp b (extend-env x new-loc env) (extend-sto new-loc expr-val expr-sto))]
+    [(with x e b) (interp b (extend-env x (interp e env) env))]
+    [(prim prim-name args) (prim-ops prim-name (map (λ (x) (interp x env)) args))]
 ))
 
-
-; malloc :: sto -> loc
-; devuelve una nueva posicion de memoria en base a un sto dado
-(define (malloc sto)
-  (match sto
-    [(mtSto) 0]
-    [(aSto loc _ tail) (+ 1 (malloc tail))] ; usamos longitud de sto. 
-    )
-  )
-
-(define (valV-upper-str s)
-  (valV (string-upcase (valV-v s)))
-)
-
-
 ; prim-ops: op-name list[Val] -> Val
-(define (prim-ops op-name args sto)
-  (let ([vals (map (λ (x) (extract-valV-v x)) args)])
-    (v*s (valV (apply (cdr (assq op-name primitives)) (extract-values vals)))sto)
+(define (prim-ops op-name args)
+  (let ([vals (map (λ (x) (valV-v x)) args)])
+    (valV (apply (cdr (assq op-name primitives)) vals))
     )
   )
 
-(define (extract-valV-v vs)
-  (match vs
-    [(v*s (valV v) _) (valV v)]
+; para mutar, necesitamos un box
 
+#|
+El interprete usa recursividad
+|#
+
+; valV+ : Val -> Val
+(define (valV+ s1 s2)
+  (valV (+ (valV-v s1) (valV-v s2)))
   )
-)
 
-(define (extract-valV vs)
-  (match vs
-    [(valV v) v]
+(define (valV- s1 s2)
+  (valV (- (valV-v s1) (valV-v s2)))
   )
-)
 
-(define (extract-values lst)
-  (map extract-valV lst))
+(define (valV* s1 s2)
+  (valV (* (valV-v s1) (valV-v s2)))
+  )
 
+(define (zeroV n)
+  (valV (eq? 0 (valV-v n))))
 
-; run: Src -> Src
-; corre un programa
-(define (run prog) ; 10. Actualizar match
-  (def (v*s res r-sto) (interp (parse prog) empty-env empty-sto)) ;5. Actualizar arg run
+(define (min-eqV s1 s2)
+  (valV (<= (valV-v s1) (valV-v s2))))
+
+(define (run prog)
+  (let* ([rec-env (extend-env 'Y (interp (parse '{fun {f} {with-rec {h {fun {g} {fun {n} {{f {g g}} n}}}} {h h}}})
+                                         empty-env) empty-env)]
+         [res (interp (parse prog) rec-env)])
     (match res
       [(valV v) v]
-      [(closureV arg body env) res]
-      [(boxV v) res]
-      )
+      [(closureV arg body env) res])
     )
+  )
 
 ; Pruebas de los problemas
 
@@ -278,26 +203,22 @@
 
 (test (run '{if-tf {== 4 4} 8 4}) 8)
 
-(test (run '{with {b {newbox 10}}
-  {seqn
-       {setbox b {+ 1{openbox b}}}
-       {openbox b}}
-}) 11)
-
-(test/exn (run '{with {a {newbox 0}}
-            {seqn {with {b 3} b}
-                  b}}) "undefined")
-
 
 (test (run '{concat-str "hola" ", " "como estas"}) "hola, como estas")
 (test (run '{sub-str "banaba" 1 4}) "ana")
-(test (run '{upper-str "hola"}) "HOLA")
 
 
 ;(run '{size (list 1 2 3 4)})
 ;(run '{mayustr "hola mundo"})
 
-; Problema 2
+; Problema 4
+
+(test (run '{rec {sum {fun {n}
+                        {if-tf {zero?? n} 0 {+ n {sum {- n 1}}}}}} {sum 3}}) 6)
+
+(test (run '{rec {factorial {fun {n} {if-tf {zero?? n}
+                               1
+                               {* n {factorial {- n 1}}}}}} {factorial 5}}) 120)
 
 ;(test (run '{with {add {fun {a b c} {+ a {+ b c}}}} {+ {add 2 3 5 } {add 4 5 6}}}) 1)
 
