@@ -35,8 +35,6 @@
    (cons '== eq?)
    (cons '!= not-equal?)
    (cons '&& and?)
-   (cons '|| or?) 
-   (cons 'concat
    (cons '|| or?)   
    (cons 'concat-str string-append)
    (cons 'sub-str substring)     
@@ -55,6 +53,8 @@
   [zero n]
   [min-eq l r]
   [if-tf c et ef]                         ; (if-tf <FAE> <FAE> <FAE>)
+  [delay e]                               ; (delay <FAE>)
+  [force e]                               ; (force <FAE>)
   [with id-name named-expr body-expr]     ; (with <id> <FAE> <FAE>)
   [id name]                               ; <id> 
   [app fname arg-expr]                    ; (app <FAE> <FAE>) ; ahora podemos aplicar una funcion a otra
@@ -68,6 +68,18 @@
   [with-a id-name named-expr body-expr]
 ) 
 
+(deftype Promise
+  [promiseV expr env])
+
+; delay :: Expr Env -> Promise
+(define (delay-func expr env)
+  (promiseV expr env))
+
+; force :: Promise Env -> Val
+(define (force-func promise env)
+  (match promise
+    [(promiseV expr promise-env)
+     (interp expr promise-env)]))
 
 #|
 <env> ::= (mtEnv)
@@ -114,6 +126,8 @@
     [(list '- s1 s2) (sub (parse s1) (parse s2))]
     [(list '* s1 s2) (mult (parse s1) (parse s2))]
     [(list 'zero?? n) (zero (parse n))]
+    [(list 'delay e) (delay (parse e))]
+    [(list 'force e) (force (parse e))]
     [(list 'min-eq?? s1 s2) (min-eq (parse s1) (parse s2))]
     [(list 'if-tf c et ef) (if-tf (parse c) (parse et) (parse ef))]
     [(list 'with-rec (list x e) b) (app (fun x (parse b)) (parse e))]
@@ -154,6 +168,8 @@
     [(add l r) (valV+ (interp l env) (interp r env))]
     [(sub l r) (valV- (interp l env) (interp r env))]
     [(mult l r) (valV* (interp l env) (interp r env))]
+    [(delay e) (delay-func e env)]
+    [(force e) (force-func (interp e env) env)]
     [(zero n) (zeroV (interp n env))]
     [(min-eq l r) (min-eqV (interp l env) (interp r env))]
     [(if-tf c et ef) (if (valV-v (interp c env))
@@ -230,16 +246,6 @@ El interprete usa recursividad
 (test (run '{if-tf {== 4 4} 8 4}) 8)
 
 (test (run '{seqn 1 2}) 2)
-
-(test (run '{with-a {b {newbox 10}}
-                  {seqn
-                   {setbox b 20}
-                   {openbox b}}}) 20)
-
-(test (run '{with-a {b {newbox 10}}
-                  {seqn
-                   {setbox b 20}
-                   {openbox b}}}) 20)
 
 ;(test/exn (run '{with {a {newbox 0}}
     ;        {seqn {with {b 3} b}
@@ -327,3 +333,6 @@ El interprete usa recursividad
 (test (run '{with {addN {fun {n}
                        {fun {x} {+ x n}}}}
             {{addN 10} 20}}) 30)
+
+
+(test (run '{force {delay {+ 1 1}}})2)
