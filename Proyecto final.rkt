@@ -22,6 +22,10 @@
   (and a b))
 (define (or? a b)
   (or a b))
+(define (f-conv-cad str mod)
+  (match mod
+    ["lower" (string-downcase str)]
+    ["upper" (string-upcase str)]))
 (define primitives
   (list
    (cons '+ +)
@@ -37,7 +41,9 @@
    (cons '&& and?)
    (cons '|| or?)   
    (cons 'concat-str string-append)
-   (cons 'sub-str substring)     
+   (cons 'sub-str substring)
+   (cons 'conv-cad f-conv-cad)
+   (cons 'lst list)
   )
 )
 
@@ -59,6 +65,10 @@
   [fun arg body]                          ; (fun <id> <FAE>) ; mantenemos el <id> como el nombre del argumento
   [rec id-name named-expr body-expr]
   [prim name args]
+  [seqn e1 e2]
+  [newbox b]
+  [openbox b]
+  [setbox b val]
 ) 
 
 
@@ -112,12 +122,22 @@
     [(list 'with-rec (list x e) b) (app (fun x (parse b)) (parse e))]
     [(list 'rec (list x e) b)
      (parse `{with-rec {,x {Y {fun {,x} ,e}}} ,b})]
-    [(list arg e) (app (parse arg) (parse e))]; 2. Subir de nivel nuestras funciones
+    [(list 'newbox b) (newbox (parse b))]
+    [(list 'openbox e) (openbox (parse e))]
+    [(list 'setbox b v) (setbox (parse b) (parse v))]
+    [(list arg e) (cond [(not (eq? arg 'lst)) (app (parse arg) (parse e))])]; 2. Subir de nivel nuestras funciones
     [(list 'fun (list arg) body) (fun arg (parse body))] ; 1. Agregar el caso del fun
     [(list 'with vars body) (concat-withs vars body)]
+    [(list 'seqn args ...)
+     (seqn* (map parse args))]
     [(cons prim-name args) (prim prim-name (map parse args))]
     )
   )
+
+(define (seqn* exprs)
+  (if (null? (cdr exprs))
+      (car exprs)
+      (seqn (car exprs) (seqn* (cdr exprs)))))
 
 (deftype Val
   (valV v) ; numero, booleano, string, byte, etc.
@@ -149,14 +169,25 @@
      ]
     [(with x e b) (interp b (extend-env x (interp e env) env))]
     [(prim prim-name args) (prim-ops prim-name (map (λ (x) (interp x env)) args))]
+
+    [(seqn e1 e2)
+     (let* ([e1-env (extend-env 'Y (interp e1 empty-env) empty-env)])
+       (interp e2 e1-env))]
+    [(newbox b) (interp b env)]
+    [(openbox b) (env-lookup b env)]
+    [(setbox b v) (interp v (extend-env b (interp v env) env))]
 ))
 
 ; prim-ops: op-name list[Val] -> Val
 (define (prim-ops op-name args)
   (let ([vals (map (λ (x) (valV-v x)) args)])
-    (valV (apply (cdr (assq op-name primitives)) vals))
+    (case op-name
+      [(primero) (valV (car vals))]
+      [(resto) (valV (cdr vals))]
+      [else (valV (apply (cdr (assq op-name primitives)) vals))]
     )
   )
+)
 
 ; para mutar, necesitamos un box
 
@@ -202,14 +233,38 @@ El interprete usa recursividad
 (test (run "hola") "hola")
 
 (test (run '{if-tf {== 4 4} 8 4}) 8)
+(test (run '{if-tf {> 4 2} 8 4}) 8)
+(test (run '{if-tf {< 4 4} 8 4}) 4)
 
+(test (run '{seqn 1 2}) 2)
+(test (run '{seqn {+ 1 1} {* 4 4}}) 16)
+(test (run '{seqn {+ 1 1} {* 4 4} {- 10 5}}) 5)
+
+(test (run '{lst}) '())
+;(test (run '{lst 1}) '(1))
+(test (run '{lst 1 2}) '(1 2))
+(test (run '{lst 1 2 3}) '(1 2 3))
 
 (test (run '{concat-str "hola" ", " "como estas"}) "hola, como estas")
 (test (run '{sub-str "banaba" 1 4}) "ana")
+(test (run '{conv-cad "hola" "upper"}) "HOLA")
+(test (run '{conv-cad "HOLA" "lower"}) "hola")
 
+(test (run '{primero 1 2 3 4}) 1)
+(test (run '{resto 1 2 3 4}) '(2 3 4))
+(test (run '{vacio}) '())
 
-;(run '{size (list 1 2 3 4)})
-;(run '{mayustr "hola mundo"})
+; Problema 2
+
+(test (run '{+ 1 2}) 3)
+(test (run '{- 3 2 1}) 0)
+(test (run '{* 1 2 3 4}) 24)
+
+(test (run '{with {{x 1} {y 2}} {+ x y}}) 3)
+(test (run '{with {{x 1} {y 2} {z 3}} {+ x y z}}) 6)
+(test (run '{with {{x 1} {y 2} {z 3} {e 4}} {+ x y z e}}) 10)
+
+;(test (run '{with {f {fun {x y} {+ x y}}}{f 10}}) 20)
 
 ; Problema 4
 

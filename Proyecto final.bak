@@ -36,29 +36,41 @@
    (cons '!= not-equal?)
    (cons '&& and?)
    (cons '|| or?)   
-   (cons 'concat string-append)
-   (cons 'subcad substring)   
-   (cons 'tamcad string-length)   
+   (cons 'concat-str string-append)
+   (cons 'sub-str substring)     
   )
 )
+
 ; (apply (cdr (assq '+ primitives)) '(1 2 3 4))
 
 (deftype Expr
   [num n]                                 ; <num>
   [bool b]                                ; <bool>
   [str s]                                 ; <string>  
+  [add l r]                               ; (+ <FAE> <FAE>)
+  [sub l r]                               ; (- <FAE> <FAE>)
+  [mult l r]
+  [zero n]
+  [min-eq l r]
   [if-tf c et ef]                         ; (if-tf <FAE> <FAE> <FAE>)
   [with id-name named-expr body-expr]     ; (with <id> <FAE> <FAE>)
   [id name]                               ; <id> 
   [app fname arg-expr]                    ; (app <FAE> <FAE>) ; ahora podemos aplicar una funcion a otra
   [fun arg body]                          ; (fun <id> <FAE>) ; mantenemos el <id> como el nombre del argumento
+  [rec id-name named-expr body-expr]
   [prim name args]
+  [seqn e1 e2]
+  [newbox b]
+  [openbox b]
+  [setbox b val]
+  [with-a id-name named-expr body-expr]
 ) 
 
 
 #|
 <env> ::= (mtEnv)
           | (aEnv <id> <val> <env>)
+          | (aRecEnv <id> <boxed-val> <env>)
 |#
 (deftype Env
   (mtEnv)
@@ -71,7 +83,7 @@
 ; extend-env:: <id> <val> <env> -> <env>
 (define extend-env aEnv)
 ; env-lookup :: <id> <env> -> <val>
-; buscar el valor de una variable dentro del ambiete
+; buscar el valor de una variable dentro del ambiente
 (define (env-lookup x env)
   (match env
     [(mtEnv) (error "undefined: " x)]
@@ -94,15 +106,34 @@
   (match src
     [(? number?) (num src)]
     [(? boolean?) (bool src)]
+    [(? string?) (str src)]
     [(? symbol?) (id src)]
-    [(? string?)(str src)]    
+    [(list '+ s1 s2) (add (parse s1) (parse s2))]
+    [(list '- s1 s2) (sub (parse s1) (parse s2))]
+    [(list '* s1 s2) (mult (parse s1) (parse s2))]
+    [(list 'zero?? n) (zero (parse n))]
+    [(list 'min-eq?? s1 s2) (min-eq (parse s1) (parse s2))]
     [(list 'if-tf c et ef) (if-tf (parse c) (parse et) (parse ef))]
-    [(list 'with vars body) (concat-withs vars body)]
+    [(list 'with-rec (list x e) b) (app (fun x (parse b)) (parse e))]
+    [(list 'rec (list x e) b)
+     (parse `{with-rec {,x {Y {fun {,x} ,e}}} ,b})]
+    [(list 'newbox b) (newbox (parse b))]
+    [(list 'openbox e) (openbox (parse e))]
+    [(list 'setbox b v) (setbox (parse b) (parse v))]
     [(list arg e) (app (parse arg) (parse e))]; 2. Subir de nivel nuestras funciones
     [(list 'fun (list arg) body) (fun arg (parse body))] ; 1. Agregar el caso del fun
+    [(list 'with-a (list x e) b) (app (fun x (parse b)) (parse e))]
+    [(list 'with vars body) (concat-withs vars body)]
+    [(list 'seqn args ...)
+     (seqn* (map parse args))]
     [(cons prim-name args) (prim prim-name (map parse args))]
     )
   )
+
+(define (seqn* exprs)
+  (if (null? (cdr exprs))
+      (car exprs)
+      (seqn (car exprs) (seqn* (cdr exprs)))))
 
 (deftype Val
   (valV v) ; numero, booleano, string, byte, etc.
@@ -117,21 +148,32 @@
     [(num n) (valV n)]
     [(bool b) (valV b)]
     [(str s) (valV s)]
-    [(list l)(valV l)]
     [(id x) (env-lookup x env)]; buscar el valor de x en env
-    [(prim prim-name args) (prim-ops prim-name (map (λ (x) (interp x env)) args))]
+    [(add l r) (valV+ (interp l env) (interp r env))]
+    [(sub l r) (valV- (interp l env) (interp r env))]
+    [(mult l r) (valV* (interp l env) (interp r env))]
+    [(zero n) (zeroV (interp n env))]
+    [(min-eq l r) (min-eqV (interp l env) (interp r env))]
     [(if-tf c et ef) (if (valV-v (interp c env))
                          (interp et env)
                          (interp ef env))]
-    [(with x e b) (interp b (extend-env x (interp e env) env))] ; Si asociamos una funcion a una variable, la funcion entra al env
     [(fun arg body) (closureV arg body env)] ; Por ahora, devolvemos la misma expresion que nos llego
     [(app f e)
-     (def (closureV arg body fenv) (interp f env)) ; Esto permite encontrar (fun 'x (add (id 'x) (id 'x))) por ejemplo y tomar arg y body    
+     (def (closureV arg body fenv) (interp f env)) ; Esto permite encontrar (fun 'x (add (id 'x) (id 'x))) por ejemplo y tomar arg y body
+    
      (interp body (extend-env arg (interp e env) fenv)) ; parece que no funciona ni con estatico ni dinamico
      ]
+    [(with x e b) (interp b (extend-env x (interp e env) env))]
+    [(prim prim-name args) (prim-ops prim-name (map (λ (x) (interp x env)) args))]
+
+    [(seqn e1 e2)
+          (begin
+            (interp e1 env)
+            (interp e2 env))]
+    [(newbox b) (interp b env)]
+    [(openbox b) (env-lookup b env)]
+    [(setbox b v) (interp v (extend-env b (interp v env) env))]
 ))
-
-
 
 ; prim-ops: op-name list[Val] -> Val
 (define (prim-ops op-name args)
@@ -140,28 +182,35 @@
     )
   )
 
-#|(define (prim-ops op-name args)
-  (with-handlers
-      ([exn? (λ (e) (error "type error"))])
-    (let ([vals (map (λ (x) (valV-v x)) args)])
-      (valV (apply (cdr (assq op-name primitives)) vals)))))
-|#
-(deftype Type
-  (Num)
-  (Bool))
+; para mutar, necesitamos un box
 
-;typeof: expr -> type/error
-(define (typeof expr)
-  (match expr
-    [(num n) (Num)]
-    [(bool b) (Bool)]
-    )
+#|
+El interprete usa recursividad
+|#
+
+; valV+ : Val -> Val
+(define (valV+ s1 s2)
+  (valV (+ (valV-v s1) (valV-v s2)))
   )
 
-; run: Src -> Src
-; corre un programa
+(define (valV- s1 s2)
+  (valV (- (valV-v s1) (valV-v s2)))
+  )
+
+(define (valV* s1 s2)
+  (valV (* (valV-v s1) (valV-v s2)))
+  )
+
+(define (zeroV n)
+  (valV (eq? 0 (valV-v n))))
+
+(define (min-eqV s1 s2)
+  (valV (<= (valV-v s1) (valV-v s2))))
+
 (define (run prog)
-  (let ([res (interp (parse prog) empty-env)])
+  (let* ([rec-env (extend-env 'Y (interp (parse '{fun {f} {with-rec {h {fun {g} {fun {n} {{f {g g}} n}}}} {h h}}})
+                                         empty-env) empty-env)]
+         [res (interp (parse prog) rec-env)])
     (match res
       [(valV v) v]
       [(closureV arg body env) res])
@@ -178,16 +227,38 @@
 
 (test (run '{if-tf {== 4 4} 8 4}) 8)
 
+(test (run '{seqn 1 2}) 2)
 
-(test (run '{concat "hola" ", " "como estas"}) "hola, como estas")
-(test (run '{subcad "banaba" 1 4}) "ana")
-;(test (run '{tamcad "hola"}) "HOLA")
+(test (run '{with-a {b {newbox 10}}
+                  {seqn
+                   {setbox b 20}
+                   {openbox b}}}) 20)
+
+(test (run '{with-a {b {newbox 10}}
+                  {seqn
+                   {setbox b 20}
+                   {openbox b}}}) 20)
+
+;(test/exn (run '{with {a {newbox 0}}
+    ;        {seqn {with {b 3} b}
+    ;              b}}) "undefined")
+
+
+(test (run '{concat-str "hola" ", " "como estas"}) "hola, como estas")
+(test (run '{sub-str "banaba" 1 4}) "ana")
 
 
 ;(run '{size (list 1 2 3 4)})
 ;(run '{mayustr "hola mundo"})
 
-; Problema 2
+; Problema 4
+
+(test (run '{rec {sum {fun {n}
+                        {if-tf {zero?? n} 0 {+ n {sum {- n 1}}}}}} {sum 3}}) 6)
+
+(test (run '{rec {factorial {fun {n} {if-tf {zero?? n}
+                               1
+                               {* n {factorial {- n 1}}}}}} {factorial 5}}) 120)
 
 ;(test (run '{with {add {fun {a b c} {+ a {+ b c}}}} {+ {add 2 3 5 } {add 4 5 6}}}) 1)
 
