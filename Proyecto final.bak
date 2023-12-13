@@ -35,6 +35,8 @@
    (cons '== eq?)
    (cons '!= not-equal?)
    (cons '&& and?)
+   (cons '|| or?) 
+   (cons 'concat
    (cons '|| or?)   
    (cons 'concat-str string-append)
    (cons 'sub-str substring)     
