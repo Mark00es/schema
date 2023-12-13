@@ -2,15 +2,9 @@
 (print-only-errors #t) ; Para ver solo los errores.
 
 #|
-<expr> ::=   <num> | <bool> | <id>
-            | (+ <expr> <expr>)
-            | (with <id> <expr> <expr>)
-            | (app <id> <expr>) 
-|#
-
-#|
-<FAE> ::=   <num> | <bool> | <id>
-            | (prim op-name <FAE> ... <FAE>)
+<FAE-L> ::=   <num> | <bool> | <id>
+            | (+ <FAE> <FAE>)
+            | (- <FAE> <FAE>)
             | (if-tf <FAE> <FAE> <FAE>)
             | (with <id> <FAE> <FAE>)
             | (app <FAE> <FAE>) ; puedo aplicar una funcion a otra funcion / puedo usar una funcion como argumento. 
@@ -47,35 +41,27 @@
   )
 )
 
-; (apply (cdr (assq '+ primitives)) '(1 2 3 4))
-
 (deftype Expr
   [num n]                                 ; <num>
   [bool b]                                ; <bool>
-  [str s]                                 ; <string>  
+  [str s]                                 ; <string> 
   [add l r]                               ; (+ <FAE> <FAE>)
   [sub l r]                               ; (- <FAE> <FAE>)
-  [mult l r]
-  [zero n]
-  [min-eq l r]
   [if-tf c et ef]                         ; (if-tf <FAE> <FAE> <FAE>)
-  [with id-name named-expr body-expr]     ; (with <id> <FAE> <FAE>)
+; [with id-name named-expr body-expr]     ; (with <id> <FAE> <FAE>) "syntax sugar"
   [id name]                               ; <id> 
   [app fname arg-expr]                    ; (app <FAE> <FAE>) ; ahora podemos aplicar una funcion a otra
-  [fun arg body]                          ; (fun <id> <FAE>) ; mantenemos el <id> como el nombre del argumento
-  [rec id-name named-expr body-expr]
+  [app-lazy fname arg-expr] 
+  [fun arg body]
   [prim name args]
   [seqn e1 e2]
-  [newbox b]
-  [openbox b]
-  [setbox b val]
+  [zero n]
 ) 
 
 
 #|
 <env> ::= (mtEnv)
           | (aEnv <id> <val> <env>)
-          | (aRecEnv <id> <boxed-val> <env>)
 |#
 (deftype Env
   (mtEnv)
@@ -88,7 +74,7 @@
 ; extend-env:: <id> <val> <env> -> <env>
 (define extend-env aEnv)
 ; env-lookup :: <id> <env> -> <val>
-; buscar el valor de una variable dentro del ambiente
+; buscar el valor de una variable dentro del ambiete
 (define (env-lookup x env)
   (match env
     [(mtEnv) (error "undefined: " x)]
@@ -96,14 +82,29 @@
     )
   )
 
-; concat-withs: Src -> Expr
-; concatena una cadena de with anidada
+
+; transform-fundef
+(define (transform-fundef arg-names body)
+  (if (= 1 (length arg-names))
+      (fun (first arg-names) body)
+      (fun (first arg-names) (transform-fundef (cdr arg-names) body)))
+  )
+; (transform-fundef '{a b} (add (id 'a) (id 'b)))
+
+
+; transform-funapp
+(define (transform-funapp fun args)
+  (if (= 1 (length args))
+      (app fun (first args))
+      (app (transform-funapp fun (cdr args)) (car args)))
+  )
+
 (define (concat-withs vars body)
   (match vars
     [(list) (parse body)]
     [(cons (list id expr) rest-vars)
-     (with id (parse expr) (concat-withs rest-vars body))]
-    [var (with (car var) (parse (cadr var)) (parse body))]))
+     (app (fun id (concat-withs rest-vars body)) (parse expr))]
+    [var (app (fun (car var) (parse body)) (parse (cadr var)))]))
 
 ; parse: Src -> Expr
 ; parsea codigo fuente
@@ -115,22 +116,28 @@
     [(? symbol?) (id src)]
     [(list '+ s1 s2) (add (parse s1) (parse s2))]
     [(list '- s1 s2) (sub (parse s1) (parse s2))]
-    [(list '* s1 s2) (mult (parse s1) (parse s2))]
     [(list 'zero?? n) (zero (parse n))]
-    [(list 'min-eq?? s1 s2) (min-eq (parse s1) (parse s2))]
     [(list 'if-tf c et ef) (if-tf (parse c) (parse et) (parse ef))]
     [(list 'with-rec (list x e) b) (app (fun x (parse b)) (parse e))]
     [(list 'rec (list x e) b)
      (parse `{with-rec {,x {Y {fun {,x} ,e}}} ,b})]
-    [(list 'newbox b) (newbox (parse b))]
-    [(list 'openbox e) (openbox (parse e))]
-    [(list 'setbox b v) (setbox (parse b) (parse v))]
-    [(list arg e) (cond [(not (eq? arg 'lst)) (app (parse arg) (parse e))])]; 2. Subir de nivel nuestras funciones
-    [(list 'fun (list arg) body) (fun arg (parse body))] ; 1. Agregar el caso del fun
+    ;[(list 'with (list x e) b) (app (fun x (parse b)) (parse e))]
     [(list 'with vars body) (concat-withs vars body)]
+    [(list 'with-lazy (list x e) b) (app-lazy (fun x (parse b)) (parse e))]
+    [(list 'fun arg-names body) (transform-fundef arg-names (parse body))] ; 1. Agregar el caso del fun
+    [(list fun args) (match args
+                       [(? number?) (app (parse fun) (parse args))]
+                       [(? boolean?) (app (parse fun) (parse args))]
+                       [(? symbol?) (app (parse fun) (parse args))]
+                       [(cons head tail) (if (symbol? (first args))
+                                             (app (parse fun) (parse args))         
+                                             (transform-funapp (parse fun) (reverse (map parse args))))]
+                       )
+     ]
     [(list 'seqn args ...)
      (seqn* (map parse args))]
     [(cons prim-name args) (prim prim-name (map parse args))]
+    ;[(list arg e) (app (parse arg) (parse e))]; 2. Subir de nivel nuestras funciones
     )
   )
 
@@ -139,10 +146,11 @@
       (car exprs)
       (seqn (car exprs) (seqn* (cdr exprs)))))
 
+
 (deftype Val
   (valV v) ; numero, booleano, string, byte, etc.
   (closureV arg body env) ; closure = fun + env
-
+  (promiseV expr env cache) ; promise = expr-L + env + cache
   )
 
 ; interp :: Expr  Env -> Val
@@ -153,29 +161,30 @@
     [(bool b) (valV b)]
     [(str s) (valV s)]
     [(id x) (env-lookup x env)]; buscar el valor de x en env
-    [(add l r) (valV+ (interp l env) (interp r env))]
-    [(sub l r) (valV- (interp l env) (interp r env))]
-    [(mult l r) (valV* (interp l env) (interp r env))]
+    [(add l r) (valV+ (strict (interp l env)) (strict (interp r env)))]
+    [(sub l r) (valV- (strict (interp l env)) (strict (interp r env)))]
     [(zero n) (zeroV (interp n env))]
-    [(min-eq l r) (min-eqV (interp l env) (interp r env))]
     [(if-tf c et ef) (if (valV-v (interp c env))
                          (interp et env)
                          (interp ef env))]
+    ;[(with x e b) (interp b (extend-env x (interp e env) env))] ; Si asociamos una funcion a una variable, la funcion entra al env
     [(fun arg body) (closureV arg body env)] ; Por ahora, devolvemos la misma expresion que nos llego
     [(app f e)
-     (def (closureV arg body fenv) (interp f env)) ; Esto permite encontrar (fun 'x (add (id 'x) (id 'x))) por ejemplo y tomar arg y body
+     (def (closureV arg body fenv) (strict (interp f env))) ; Esto permite encontrar (fun 'x (add (id 'x) (id 'x))) por ejemplo y tomar arg y body
     
-     (interp body (extend-env arg (interp e env) fenv)) ; parece que no funciona ni con estatico ni dinamico
+     (interp body (extend-env arg (interp e env) fenv))]
+    [(app-lazy f e)
+     (def (closureV arg body fenv) (strict (interp f env))) ; Esto permite encontrar (fun 'x (add (id 'x) (id 'x))) por ejemplo y tomar arg y body
+    
+     (interp body (extend-env arg
+                              (promiseV e env (box #f)) ; lazy eval
+                              ;(interp e env) ; eager eval
+                              fenv)) ; parece que no funciona ni con estatico ni dinamico
      ]
-    [(with x e b) (interp b (extend-env x (interp e env) env))]
     [(prim prim-name args) (prim-ops prim-name (map (λ (x) (interp x env)) args))]
-
     [(seqn e1 e2)
      (let* ([e1-env (extend-env 'Y (interp e1 empty-env) empty-env)])
        (interp e2 e1-env))]
-    [(newbox b) (interp b env)]
-    [(openbox b) (env-lookup b env)]
-    [(setbox b v) (interp v (extend-env b (interp v env) env))]
 ))
 
 ; prim-ops: op-name list[Val] -> Val
@@ -189,11 +198,8 @@
   )
 )
 
-; para mutar, necesitamos un box
 
-#|
-El interprete usa recursividad
-|#
+; (run '{{fun {a b} {+ a b}} 1 3})
 
 ; valV+ : Val -> Val
 (define (valV+ s1 s2)
@@ -204,21 +210,35 @@ El interprete usa recursividad
   (valV (- (valV-v s1) (valV-v s2)))
   )
 
-(define (valV* s1 s2)
-  (valV (* (valV-v s1) (valV-v s2)))
-  )
-
 (define (zeroV n)
   (valV (eq? 0 (valV-v n))))
 
-(define (min-eqV s1 s2)
-  (valV (<= (valV-v s1) (valV-v s2))))
+; strict -> Val(valV/closureV/promiseV) -> Val (valV/closureV))
+; destructor de promesas - cumplidor de promesas
+(define (strict val)
+  (match val
+    [(promiseV e env cache)
+     (if (unbox cache)
+         (begin
+           ;(printf "Using cached value~n")
+           (unbox cache)
+           )
+         (let ([interp-val (strict (interp e env))])
+           (begin (set-box! cache interp-val)
+                  ;(printf "Forcing: ~a~n " interp-val)
+                  interp-val))
+         )]
+    [else val]
+    )
+  )
 
+; run: Src -> Src
+; corre un programa
 (define (run prog)
   (let* ([rec-env (extend-env 'Y (interp (parse '{fun {f} {with-rec {h {fun {g} {fun {n} {{f {g g}} n}}}} {h h}}})
                                          empty-env) empty-env)]
          [res (interp (parse prog) rec-env)])
-    (match res
+    (match (strict res)
       [(valV v) v]
       [(closureV arg body env) res])
     )
@@ -234,14 +254,13 @@ El interprete usa recursividad
 
 (test (run '{if-tf {== 4 4} 8 4}) 8)
 (test (run '{if-tf {> 4 2} 8 4}) 8)
-(test (run '{if-tf {< 4 4} 8 4}) 4)
+(test (run '{if-tf {< 4 2} 8 4}) 4)
 
 (test (run '{seqn 1 2}) 2)
 (test (run '{seqn {+ 1 1} {* 4 4}}) 16)
 (test (run '{seqn {+ 1 1} {* 4 4} {- 10 5}}) 5)
 
 (test (run '{lst}) '())
-;(test (run '{lst 1}) '(1))
 (test (run '{lst 1 2}) '(1 2))
 (test (run '{lst 1 2 3}) '(1 2 3))
 
@@ -252,7 +271,7 @@ El interprete usa recursividad
 
 (test (run '{primero 1 2 3 4}) 1)
 (test (run '{resto 1 2 3 4}) '(2 3 4))
-(test (run '{vacio}) '())
+
 
 ; Problema 2
 
@@ -264,7 +283,9 @@ El interprete usa recursividad
 (test (run '{with {{x 1} {y 2} {z 3}} {+ x y z}}) 6)
 (test (run '{with {{x 1} {y 2} {z 3} {e 4}} {+ x y z e}}) 10)
 
-;(test (run '{with {f {fun {x y} {+ x y}}}{f 10}}) 20)
+(test (run '{{fun (a) {+ a a}} {3}}) 6)
+(test (run '{{fun (a b) {+ a b}} {3 2}}) 5)
+(test (run '{{fun (a b c) {+ a b c}} {3 2 1}}) 6)
 
 ; Problema 4
 
@@ -275,7 +296,9 @@ El interprete usa recursividad
                                1
                                {* n {factorial {- n 1}}}}}} {factorial 5}}) 120)
 
-;(test (run '{with {add {fun {a b c} {+ a {+ b c}}}} {+ {add 2 3 5 } {add 4 5 6}}}) 1)
+; Problema 5
+
+(test (run '{with-lazy {x y} 1}) 1)
 
 ; Pruebas base para el intérprete final
 
